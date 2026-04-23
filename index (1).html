@@ -1,0 +1,527 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta
+    name="viewport"
+    content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"
+  />
+  <title>Mirror-Sync SBS AR (Three.js)</title>
+  <style>
+    :root { color-scheme: dark; }
+
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      touch-action: none;
+    }
+
+    #app {
+      position: fixed;
+      inset: 0;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    #hud {
+      position: fixed;
+      top: max(10px, env(safe-area-inset-top));
+      left: max(10px, env(safe-area-inset-left));
+      right: max(10px, env(safe-area-inset-right));
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      pointer-events: none;
+    }
+
+    #leftControls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      pointer-events: auto;
+    }
+
+    button,
+    input[type="file"] {
+      background: rgba(0, 0, 0, 0.55);
+      color: #fff;
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      border-radius: 10px;
+      padding: 8px 10px;
+      font-size: 14px;
+      backdrop-filter: blur(4px);
+    }
+
+    input[type="file"] {
+      max-width: 58vw;
+    }
+
+    #status {
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.9);
+      text-shadow: 0 1px 2px #000;
+      pointer-events: none;
+    }
+
+    #startOverlay,
+    #rotateOverlay {
+      position: fixed;
+      inset: 0;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      text-align: center;
+      color: #fff;
+      background: rgba(0, 0, 0, 0.72);
+    }
+
+    #startCard {
+      max-width: 560px;
+      background: rgba(0, 0, 0, 0.5);
+      border: 1px solid rgba(255, 255, 255, 0.24);
+      border-radius: 14px;
+      padding: 18px;
+    }
+
+    #startCard h1 {
+      margin: 0 0 8px;
+      font-size: 20px;
+    }
+
+    #startCard p {
+      margin: 0 0 12px;
+      font-size: 14px;
+      line-height: 1.4;
+      opacity: 0.9;
+    }
+
+    #startBtn {
+      width: 100%;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    #rotateOverlay {
+      display: none;
+      z-index: 30;
+      background: #000;
+      font-size: clamp(20px, 4.8vw, 30px);
+      font-weight: 700;
+      letter-spacing: 0.3px;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    @media (orientation: portrait) {
+      #rotateOverlay {
+        display: flex;
+      }
+
+      #hud {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+
+  <div id="hud">
+    <div id="leftControls">
+      <input id="modelInput" type="file" accept=".glb,.gltf,model/gltf-binary,model/gltf+json" />
+      <button id="recenterBtn" type="button">Recenter</button>
+    </div>
+    <div id="status">Idle</div>
+  </div>
+
+  <div id="startOverlay">
+    <div id="startCard">
+      <h1>Mirror-Sync Stereo AR</h1>
+      <p>Tap Start, allow camera + motion, then hold phone in landscape.</p>
+      <button id="startBtn" type="button">Start AR</button>
+    </div>
+  </div>
+
+  <div id="rotateOverlay">
+    Landscape Only<br />
+    <span style="font-size:14px;font-weight:500;opacity:0.85;">Rotate your device</span>
+  </div>
+
+  <script type="module">
+    import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js";
+    import { GLTFLoader } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/loaders/GLTFLoader.js";
+
+    const app = document.getElementById("app");
+    const modelInput = document.getElementById("modelInput");
+    const recenterBtn = document.getElementById("recenterBtn");
+    const startBtn = document.getElementById("startBtn");
+    const startOverlay = document.getElementById("startOverlay");
+    const statusEl = document.getElementById("status");
+
+    const renderer = new THREE.WebGLRenderer({
+      antialias: false,
+      alpha: false,
+      powerPreference: "high-performance",
+      premultipliedAlpha: false
+    });
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.autoClear = true;
+    renderer.setClearColor(0x000000, 1);
+    app.appendChild(renderer.domElement);
+
+    // Shared AR scene (tracking + model + camera passthrough background).
+    const arScene = new THREE.Scene();
+    const arCamera = new THREE.PerspectiveCamera(60, 1, 0.01, 100);
+
+    const trackingRoot = new THREE.Group();
+    arScene.add(trackingRoot);
+
+    const hemi = new THREE.HemisphereLight(0xffffff, 0x202020, 1.1);
+    trackingRoot.add(hemi);
+
+    const key = new THREE.DirectionalLight(0xffffff, 1.2);
+    key.position.set(1, 2, 1);
+    trackingRoot.add(key);
+
+    let currentModelContainer = createDefaultModel();
+    trackingRoot.add(currentModelContainer);
+
+    // Off-screen Mirror-Sync render target (single source texture for both eyes).
+    const renderTarget = new THREE.WebGLRenderTarget(2, 2, {
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      depthBuffer: true,
+      stencilBuffer: false
+    });
+    renderTarget.texture.generateMipmaps = false;
+    renderTarget.texture.colorSpace = THREE.SRGBColorSpace;
+
+    // SBS composition scene: two identical quads with same render-target texture.
+    const sbsScene = new THREE.Scene();
+    const sbsCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
+    const eyeMaterial = new THREE.MeshBasicMaterial({
+      map: renderTarget.texture,
+      depthTest: false,
+      depthWrite: false
+    });
+
+    const eyeGeometry = new THREE.PlaneGeometry(1, 2);
+
+    const leftEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
+    leftEye.position.x = -0.5;
+
+    const rightEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
+    rightEye.position.x = 0.5;
+
+    sbsScene.add(leftEye, rightEye);
+
+    // Camera passthrough video texture as scene background.
+    const video = document.createElement("video");
+    video.setAttribute("playsinline", "");
+    video.setAttribute("webkit-playsinline", "");
+    video.muted = true;
+    video.autoplay = true;
+
+    const cameraTexture = new THREE.VideoTexture(video);
+    cameraTexture.colorSpace = THREE.SRGBColorSpace;
+    cameraTexture.minFilter = THREE.LinearFilter;
+    cameraTexture.magFilter = THREE.LinearFilter;
+    cameraTexture.generateMipmaps = false;
+    cameraTexture.matrixAutoUpdate = false;
+    arScene.background = cameraTexture;
+
+    const gltfLoader = new GLTFLoader();
+    const drawSize = new THREE.Vector2();
+
+    let stream = null;
+    let started = false;
+
+    // Device orientation math (lightweight tracking).
+    const zee = new THREE.Vector3(0, 0, 1);
+    const euler = new THREE.Euler();
+    const q0 = new THREE.Quaternion();
+    const q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
+    const deviceQ = new THREE.Quaternion();
+    const refQ = new THREE.Quaternion();
+    let hasRef = false;
+    let screenOrientationRad = 0;
+
+    updateScreenOrientation();
+
+    function setStatus(text) {
+      statusEl.textContent = text;
+    }
+
+    async function requestMotionPermission() {
+      if (
+        typeof DeviceOrientationEvent !== "undefined" &&
+        typeof DeviceOrientationEvent.requestPermission === "function"
+      ) {
+        const result = await DeviceOrientationEvent.requestPermission();
+        if (result !== "granted") throw new Error("Motion permission denied.");
+      }
+    }
+
+    async function startCamera() {
+      const constraints = {
+        audio: false,
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+          aspectRatio: { ideal: 16 / 9 }
+        }
+      };
+
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+      } catch {
+        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      }
+
+      video.srcObject = stream;
+      await video.play();
+      video.addEventListener("loadedmetadata", updateCameraUvTransform, { once: true });
+      updateCameraUvTransform();
+    }
+
+    async function startAR() {
+      if (started) return;
+      if (!window.isSecureContext) throw new Error("Use HTTPS (or localhost) for camera/motion.");
+      if (!navigator.mediaDevices?.getUserMedia) throw new Error("getUserMedia not supported.");
+
+      setStatus("Requesting permissions...");
+      await requestMotionPermission();
+      await startCamera();
+
+      window.addEventListener("deviceorientation", onDeviceOrientation, { passive: true });
+      window.addEventListener("orientationchange", updateScreenOrientation, { passive: true });
+      if (screen.orientation?.addEventListener) {
+        screen.orientation.addEventListener("change", updateScreenOrientation);
+      }
+
+      started = true;
+      hasRef = false;
+      resize();
+      startOverlay.classList.add("hidden");
+      setStatus("Running");
+      animate();
+    }
+
+    function updateScreenOrientation() {
+      const angleDeg =
+        screen.orientation && typeof screen.orientation.angle === "number"
+          ? screen.orientation.angle
+          : window.orientation || 0;
+      screenOrientationRad = THREE.MathUtils.degToRad(angleDeg);
+    }
+
+    function onDeviceOrientation(e) {
+      if (e.alpha == null || e.beta == null || e.gamma == null) return;
+
+      const alpha = THREE.MathUtils.degToRad(e.alpha);
+      const beta = THREE.MathUtils.degToRad(e.beta);
+      const gamma = THREE.MathUtils.degToRad(e.gamma);
+
+      // DeviceOrientationControls-style quaternion, then invert for world-rotation.
+      euler.set(beta, alpha, -gamma, "YXZ");
+      deviceQ.setFromEuler(euler);
+      deviceQ.multiply(q1);
+      deviceQ.multiply(q0.setFromAxisAngle(zee, -screenOrientationRad));
+
+      if (!hasRef) {
+        refQ.copy(deviceQ);
+        hasRef = true;
+      }
+
+      // Rotate whole tracked scene so object feels pinned in space.
+      trackingRoot.quaternion.copy(deviceQ).invert().multiply(refQ);
+    }
+
+    function updateCameraUvTransform() {
+      if (!video.videoWidth || !video.videoHeight) return;
+
+      const videoAspect = video.videoWidth / video.videoHeight;
+      const targetAspect = arCamera.aspect; // this is one-eye aspect (RT width/height)
+
+      let sx = 1, sy = 1, tx = 0, ty = 0;
+
+      // Cover-fit with center crop, no stretching:
+      // use texture.matrix.setUvTransform as requested.
+      if (targetAspect > videoAspect) {
+        sy = videoAspect / targetAspect;
+        ty = (1 - sy) * 0.5;
+      } else {
+        sx = targetAspect / videoAspect;
+        tx = (1 - sx) * 0.5;
+      }
+
+      cameraTexture.matrix.setUvTransform(tx, ty, sx, sy, 0, 0.5, 0.5);
+    }
+
+    function resize() {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      renderer.setPixelRatio(dpr);
+      renderer.setSize(window.innerWidth, window.innerHeight, false);
+
+      renderer.getDrawingBufferSize(drawSize);
+
+      // Mirror-Sync source rendered once at one-eye aspect.
+      const eyeW = Math.max(2, Math.floor(drawSize.x * 0.5));
+      const eyeH = Math.max(2, Math.floor(drawSize.y));
+
+      renderTarget.setSize(eyeW, eyeH);
+      arCamera.aspect = eyeW / eyeH;
+      arCamera.updateProjectionMatrix();
+
+      updateCameraUvTransform();
+    }
+
+    function animate() {
+      if (!started) return;
+      requestAnimationFrame(animate);
+
+      if (window.innerHeight > window.innerWidth) return; // Landscape only.
+
+      // Pass 1: render shared AR scene (camera passthrough + 3D) to off-screen RT.
+      renderer.setRenderTarget(renderTarget);
+      renderer.clear();
+      renderer.render(arScene, arCamera);
+
+      // Pass 2: map same RT onto two identical side-by-side quads.
+      renderer.setRenderTarget(null);
+      renderer.clear();
+      renderer.render(sbsScene, sbsCamera);
+    }
+
+    function createDefaultModel() {
+      const group = new THREE.Group();
+
+      const core = new THREE.Mesh(
+        new THREE.IcosahedronGeometry(0.24, 3),
+        new THREE.MeshStandardMaterial({
+          color: 0x2fd9ff,
+          metalness: 0.1,
+          roughness: 0.35
+        })
+      );
+      core.position.y = 0.1;
+      group.add(core);
+
+      const ring = new THREE.Mesh(
+        new THREE.TorusGeometry(0.34, 0.01, 18, 72),
+        new THREE.MeshBasicMaterial({ color: 0xffffff })
+      );
+      ring.rotation.x = Math.PI * 0.5;
+      group.add(ring);
+
+      group.position.set(0, 0, -1.8);
+      return group;
+    }
+
+    function disposeObject(root) {
+      root.traverse((obj) => {
+        if (obj.isMesh) {
+          if (obj.geometry) obj.geometry.dispose();
+          if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose());
+          else if (obj.material) obj.material.dispose();
+        }
+      });
+    }
+
+    function normalizeModel(modelRoot) {
+      const box = new THREE.Box3().setFromObject(modelRoot);
+      const size = new THREE.Vector3();
+      const center = new THREE.Vector3();
+      box.getSize(size);
+      box.getCenter(center);
+
+      modelRoot.position.sub(center);
+
+      const maxDim = Math.max(size.x, size.y, size.z) || 1;
+      const targetSize = 0.7;
+      const scale = targetSize / maxDim;
+
+      const container = new THREE.Group();
+      container.add(modelRoot);
+      container.scale.setScalar(scale);
+      container.position.set(0, 0, -1.8);
+      return container;
+    }
+
+    async function loadModel(file) {
+      const url = URL.createObjectURL(file);
+      setStatus(`Loading ${file.name}...`);
+
+      try {
+        const gltf = await gltfLoader.loadAsync(url);
+        const scene = gltf.scene || gltf.scenes?.[0];
+        if (!scene) throw new Error("No scene in model.");
+
+        const nextModel = normalizeModel(scene);
+
+        trackingRoot.remove(currentModelContainer);
+        disposeObject(currentModelContainer);
+
+        currentModelContainer = nextModel;
+        trackingRoot.add(currentModelContainer);
+        setStatus(`Loaded ${file.name}`);
+      } catch (err) {
+        console.error(err);
+        setStatus(`Failed to load ${file.name}`);
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    }
+
+    modelInput.addEventListener("change", async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+
+      const n = file.name.toLowerCase();
+      if (!n.endsWith(".glb") && !n.endsWith(".gltf")) {
+        setStatus("Pick a .glb or .gltf file.");
+        return;
+      }
+
+      await loadModel(file);
+    });
+
+    recenterBtn.addEventListener("click", () => {
+      refQ.copy(deviceQ);
+      hasRef = true;
+      setStatus("Recentered");
+    });
+
+    startBtn.addEventListener("click", async () => {
+      startBtn.disabled = true;
+      try {
+        await startAR();
+      } catch (err) {
+        console.error(err);
+        setStatus(err.message || "Start failed.");
+        startBtn.disabled = false;
+      }
+    });
+
+    window.addEventListener("resize", resize, { passive: true });
+    resize();
+  </script>
+</body>
+</html>
