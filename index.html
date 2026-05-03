@@ -2,98 +2,87 @@
 <html>
   <head>
     <meta charset="utf-8">
-    <title>Pro VR Passthrough</title>
+    <title>High-Sync VR Passthrough</title>
     <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
     <style>
-      body { background: #000; margin: 0; overflow: hidden; }
-      #overlay {
-        position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-        display: flex; flex-direction: column; justify-content: center; align-items: center;
-        background: rgba(0,0,0,0.9); z-index: 10000;
+      #gui {
+        position: fixed; top: 10px; left: 50%; transform: translateX(-50%);
+        z-index: 1000; display: flex; gap: 10px;
       }
       button {
-        padding: 20px 40px; font-size: 1.2rem; background: #0f0; color: #000;
-        border: none; border-radius: 50px; font-weight: bold; cursor: pointer;
-      }
-      .lens-btn {
-        position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
-        z-index: 999; padding: 10px 20px; background: rgba(0,255,0,0.2);
-        color: #0f0; border: 1px solid #0f0; border-radius: 5px; display: none;
+        padding: 12px 24px; background: #000; color: #0f0; border: 2px solid #0f0;
+        border-radius: 30px; font-weight: bold; cursor: pointer;
       }
     </style>
   </head>
-  <body>
+  <body style="background: #000;">
 
-    <div id="overlay">
-      <button onclick="startApp()">START VR VIEW</button>
+    <div id="gui">
+      <button onclick="enterVR()">1. ACTIVATE VR</button>
+      <button onclick="switchLens()">2. TOGGLE REAR LENS</button>
     </div>
-
-    <button id="lensToggle" class="lens-btn" onclick="cycleLenses()">SWITCH LENS (0.5x / 1x)</button>
 
     <a-scene loading-screen="enabled: false" cursor="rayOrigin: mouse" raycaster="objects: .interactive">
       <a-assets>
         <video id="webcam" playsinline crossorigin="anonymous" autoplay></video>
       </a-assets>
 
+      <a-entity id="browser-window" position="0 1.6 -3" class="interactive">
+        <a-plane width="3.2" height="2.2" color="#000" opacity="0.9" material="shader: flat; depthTest: false"></a-plane>
+        <a-plane id="click-surface" width="3" height="2" color="#222" class="interactive" material="shader: flat; depthTest: false">
+          <a-text value="STATIONARY WINDOW\nStereo Sync Active\nTap to Click" align="center" width="2.5" color="#0f0"></a-text>
+        </a-plane>
+      </a-entity>
+
       <a-entity id="rig">
         <a-camera look-controls="pointerLockEnabled: true">
           
           <a-video src="#webcam" 
-                   position="0 0 -10" 
-                   width="30" height="22.5" 
+                   id="stereo-bg"
+                   position="0 0 -15" 
+                   width="40" height="30" 
                    material="shader: flat; depthTest: false; depthWrite: false"
-                   render-order="0">
+                   class="not-interactive">
           </a-video>
 
           <a-entity cursor="fuse: false"
                     position="0 0 -1"
-                    geometry="primitive: ring; radiusInner: 0.008; radiusOuter: 0.012"
-                    material="color: #0f0; shader: flat; depthTest: false"
-                    raycaster="objects: .interactive"
-                    render-order="2">
+                    geometry="primitive: ring; radiusInner: 0.01; radiusOuter: 0.015"
+                    material="color: #0f0; shader: flat; depthTest: false; transparent: true; opacity: 0.8">
           </a-entity>
+          
         </a-camera>
       </a-entity>
-
-      <a-entity id="browser-window" position="0 1.6 -3" class="interactive" render-order="1">
-        <a-plane width="3.2" height="2.2" color="#000" opacity="0.85"></a-plane>
-        <a-plane id="click-surface" width="3" height="2" color="#111" class="interactive">
-          <a-text value="FLOATING BROWSER\nTap to click" align="center" width="2.5" color="#0f0"></a-text>
-        </a-plane>
-      </a-entity>
-
     </a-scene>
 
     <script>
       const video = document.getElementById('webcam');
       let backCameras = [];
-      let lensIdx = 0;
+      let activeIdx = 0;
 
-      async function startApp() {
-        document.getElementById('overlay').style.display = 'none';
-        document.getElementById('lensToggle').style.display = 'block';
-        
+      async function enterVR() {
         const scene = document.querySelector('a-scene');
-        if (scene.enterVR) scene.enterVR();
+        scene.enterVR();
 
+        // Detect all back-facing cameras
         const devices = await navigator.mediaDevices.enumerateDevices();
         backCameras = devices.filter(d => 
           d.kind === 'videoinput' && 
-          !/front|selfie|user/i.test(d.label)
+          !/(front|selfie|user)/i.test(d.label)
         );
 
-        startStream();
+        setupCamera();
       }
 
-      async function startStream() {
+      async function setupCamera() {
         if (window.stream) window.stream.getTracks().forEach(t => t.stop());
 
         const constraints = {
           video: {
-            deviceId: backCameras[lensIdx] ? { exact: backCameras[lensIdx].deviceId } : undefined,
-            facingMode: 'environment',
+            deviceId: backCameras[activeIdx] ? { exact: backCameras[activeIdx].deviceId } : undefined,
             width: { ideal: 3840 },
-            height: { ideal: 2160 }
+            height: { ideal: 2160 },
+            frameRate: { ideal: 60 }
           }
         };
 
@@ -101,22 +90,23 @@
           window.stream = await navigator.mediaDevices.getUserMedia(constraints);
           video.srcObject = window.stream;
         } catch (e) {
-          console.error(e);
-          // Simple fallback
-          video.srcObject = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+          // Fallback to default environment camera
+          video.srcObject = await navigator.mediaDevices.getUserMedia({video: {facingMode: 'environment'}});
         }
       }
 
-      function cycleLenses() {
+      function switchLens() {
         if (backCameras.length > 1) {
-          lensIdx = (lensIdx + 1) % backCameras.length;
-          startStream();
+          activeIdx = (activeIdx + 1) % backCameras.length;
+          setupCamera();
         }
       }
 
+      // Tap-to-Click functionality
       document.querySelector('#click-surface').addEventListener('click', function() {
-        this.setAttribute('color', '#004400');
-        setTimeout(() => this.setAttribute('color', '#111'), 100);
+        this.setAttribute('color', '#00ff00');
+        setTimeout(() => this.setAttribute('color', '#222'), 150);
+        console.log("Click triggered at reticle position.");
       });
     </script>
   </body>
