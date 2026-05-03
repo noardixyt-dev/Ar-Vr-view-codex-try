@@ -2,58 +2,122 @@
 <html>
   <head>
     <meta charset="utf-8">
-    <title>AR-Tracked VR Window</title>
+    <title>Pro VR Passthrough</title>
     <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
+    <style>
+      body { background: #000; margin: 0; overflow: hidden; }
+      #overlay {
+        position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+        display: flex; flex-direction: column; justify-content: center; align-items: center;
+        background: rgba(0,0,0,0.9); z-index: 10000;
+      }
+      button {
+        padding: 20px 40px; font-size: 1.2rem; background: #0f0; color: #000;
+        border: none; border-radius: 50px; font-weight: bold; cursor: pointer;
+      }
+      .lens-btn {
+        position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+        z-index: 999; padding: 10px 20px; background: rgba(0,255,0,0.2);
+        color: #0f0; border: 1px solid #0f0; border-radius: 5px; display: none;
+      }
+    </style>
   </head>
-  <body style="background-color: transparent;">
+  <body>
 
-    <a-scene 
-      webxr="optionalFeatures: hit-test, dom-overlay; overlayElement: #ui;"
-      cursor="rayOrigin: mouse" 
-      raycaster="objects: .interactive"
-      transparent="true">
-      
-      <a-entity id="browser-window" position="0 1.5 -2" class="interactive">
-        <a-plane width="2.2" height="1.4" color="#111" opacity="0.9"></a-plane>
-        <a-plane id="click-surface" width="2" height="1.2" color="#222" class="interactive" material="shader: flat">
-          <a-text value="AR TRACKED WINDOW\nLocked to the world\nLook around me." align="center" width="2"></a-text>
-        </a-plane>
-      </a-entity>
+    <div id="overlay">
+      <button onclick="startApp()">START VR VIEW</button>
+    </div>
+
+    <button id="lensToggle" class="lens-btn" onclick="cycleLenses()">SWITCH LENS (0.5x / 1x)</button>
+
+    <a-scene loading-screen="enabled: false" cursor="rayOrigin: mouse" raycaster="objects: .interactive">
+      <a-assets>
+        <video id="webcam" playsinline crossorigin="anonymous" autoplay></video>
+      </a-assets>
 
       <a-entity id="rig">
-        <a-camera look-controls>
+        <a-camera look-controls="pointerLockEnabled: true">
+          
+          <a-video src="#webcam" 
+                   position="0 0 -10" 
+                   width="30" height="22.5" 
+                   material="shader: flat; depthTest: false; depthWrite: false"
+                   render-order="0">
+          </a-video>
+
           <a-entity cursor="fuse: false"
                     position="0 0 -1"
-                    geometry="primitive: ring; radiusInner: 0.007; radiusOuter: 0.01"
-                    material="color: #00ff00; shader: flat"
-                    raycaster="objects: .interactive">
+                    geometry="primitive: ring; radiusInner: 0.008; radiusOuter: 0.012"
+                    material="color: #0f0; shader: flat; depthTest: false"
+                    raycaster="objects: .interactive"
+                    render-order="2">
           </a-entity>
         </a-camera>
       </a-entity>
 
+      <a-entity id="browser-window" position="0 1.6 -3" class="interactive" render-order="1">
+        <a-plane width="3.2" height="2.2" color="#000" opacity="0.85"></a-plane>
+        <a-plane id="click-surface" width="3" height="2" color="#111" class="interactive">
+          <a-text value="FLOATING BROWSER\nTap to click" align="center" width="2.5" color="#0f0"></a-text>
+        </a-plane>
+      </a-entity>
+
     </a-scene>
 
-    <div id="ui" style="position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);">
-        <button onclick="requestAR()" style="padding: 20px; background: #0f0; font-weight: bold;">ENTER AR MODE</button>
-    </div>
-
     <script>
-      // This function triggers the high-quality system passthrough
-      function requestAR() {
-        const sceneEl = document.querySelector('a-scene');
-        // This tells the headset/phone to use its official AR passthrough
-        sceneEl.enterVR(); 
+      const video = document.getElementById('webcam');
+      let backCameras = [];
+      let lensIdx = 0;
+
+      async function startApp() {
+        document.getElementById('overlay').style.display = 'none';
+        document.getElementById('lensToggle').style.display = 'block';
+        
+        const scene = document.querySelector('a-scene');
+        if (scene.enterVR) scene.enterVR();
+
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        backCameras = devices.filter(d => 
+          d.kind === 'videoinput' && 
+          !/front|selfie|user/i.test(d.label)
+        );
+
+        startStream();
       }
 
-      // Handle Tap-to-Click
-      document.querySelector('#click-surface').addEventListener('click', function() {
-        this.setAttribute('color', '#00ff00');
-        setTimeout(() => this.setAttribute('color', '#222'), 100);
-      });
+      async function startStream() {
+        if (window.stream) window.stream.getTracks().forEach(t => t.stop());
 
-      // To fix the lens issue, we rely on the device's default AR lens.
-      // Most AR engines (ARCore/ARKit) default to the best "Main" or "Wide" 
-      // lens automatically to ensure tracking stability.
+        const constraints = {
+          video: {
+            deviceId: backCameras[lensIdx] ? { exact: backCameras[lensIdx].deviceId } : undefined,
+            facingMode: 'environment',
+            width: { ideal: 3840 },
+            height: { ideal: 2160 }
+          }
+        };
+
+        try {
+          window.stream = await navigator.mediaDevices.getUserMedia(constraints);
+          video.srcObject = window.stream;
+        } catch (e) {
+          console.error(e);
+          // Simple fallback
+          video.srcObject = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+        }
+      }
+
+      function cycleLenses() {
+        if (backCameras.length > 1) {
+          lensIdx = (lensIdx + 1) % backCameras.length;
+          startStream();
+        }
+      }
+
+      document.querySelector('#click-surface').addEventListener('click', function() {
+        this.setAttribute('color', '#004400');
+        setTimeout(() => this.setAttribute('color', '#111'), 100);
+      });
     </script>
   </body>
 </html>
