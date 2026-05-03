@@ -2,63 +2,51 @@
 <html>
   <head>
     <meta charset="utf-8">
-    <title>VR Passthrough Browser</title>
+    <title>Fixed VR Passthrough</title>
     <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
     <style>
-      /* HUD buttons that stay on top of the screen for non-VR tapping */
-      .controls {
+      .overlay {
         position: fixed;
-        bottom: 20px;
-        left: 50%;
-        transform: translateX(-50%);
-        z-index: 10;
-        display: flex;
-        gap: 10px;
+        top: 10px;
+        left: 10px;
+        z-index: 9999;
       }
       button {
-        padding: 12px 20px;
-        background: rgba(0, 0, 0, 0.7);
-        color: white;
-        border: 2px solid #555;
-        border-radius: 8px;
-        font-family: sans-serif;
-        cursor: pointer;
+        padding: 15px;
+        background: #222;
+        color: #0f0;
+        border: 1px solid #0f0;
+        font-weight: bold;
       }
     </style>
   </head>
   <body>
 
-    <div class="controls">
-      <button onclick="cycleCamera()">Switch Camera (Zoom/Wide)</button>
+    <div class="overlay">
+      <button onclick="initCamera()">START CAMERA / SWITCH LENS</button>
     </div>
 
-    <a-scene cursor="rayOrigin: mouse" raycaster="objects: .interactive">
+    <a-scene cursor="rayOrigin: mouse" raycaster="objects: .interactive" vr-mode-ui="enabled: true">
       <a-assets>
-        <video id="webcam" playsinline crossorigin="anonymous"></video>
+        <video id="webcam" playsinline crossorigin="anonymous" autoplay></video>
       </a-assets>
 
-      <a-videosphere src="#webcam" rotation="0 -90 0" radius="100"></a-videosphere>
+      <a-videosphere src="#webcam" rotation="0 -90 0" radius="50"></a-videosphere>
 
       <a-entity id="browser-window" position="0 1.6 -3" class="interactive">
-        <a-plane width="3.2" height="2.2" color="#333" position="0 0 -0.01"></a-plane>
-        <a-plane id="click-surface" 
-                 width="3" height="2" 
-                 color="#222" 
-                 opacity="0.6"
-                 class="interactive"
-                 material="shader: flat"
-                 onclick="handleVRClick()">
-          <a-text value="STATIONARY WINDOW\nLook around; I stay here.\nTap screen to 'click' at cursor." 
-                  align="center" width="2.8" color="#FFF"></a-text>
+        <a-plane width="3.2" height="2.2" color="#111" opacity="0.8" position="0 0 -0.01"></a-plane>
+        <a-plane id="click-surface" width="3" height="2" color="#333" class="interactive">
+          <a-text value="STATIONARY BROWSER\nIf cursor is split, adjust phone in headset." 
+                  align="center" width="2.5"></a-text>
         </a-plane>
       </a-entity>
 
       <a-entity id="rig">
-        <a-camera look-controls>
-          <a-entity cursor="fuse: false;"
-                    position="0 0 -1"
-                    geometry="primitive: ring; radiusInner: 0.008; radiusOuter: 0.012"
-                    material="color: #00FF00; shader: flat; opacity: 0.8"
+        <a-camera look-controls="pointerLockEnabled: true">
+          <a-entity cursor="fuse: false"
+                    position="0 0 -1.01"
+                    geometry="primitive: ring; radiusInner: 0.01; radiusOuter: 0.015"
+                    material="color: #00ff00; shader: flat; transparent: true; opacity: 0.5"
                     raycaster="objects: .interactive">
           </a-entity>
         </a-camera>
@@ -66,57 +54,51 @@
     </a-scene>
 
     <script>
-      const video = document.querySelector('#webcam');
-      let currentDeviceIndex = 0;
-      let videoDevices = [];
+      const video = document.getElementById('webcam');
+      let currentStream = null;
+      let devices = [];
+      let deviceIdx = 0;
 
-      // 1. Find all available cameras
-      async function getCameras() {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        videoDevices = devices.filter(device => device.kind === 'videoinput');
-        startCamera(videoDevices[currentDeviceIndex].deviceId);
-      }
-
-      // 2. Start the stream with high quality settings
-      async function startCamera(deviceId) {
-        if (window.stream) {
-          window.stream.getTracks().forEach(track => track.stop());
+      async function initCamera() {
+        // Stop current stream if switching
+        if (currentStream) {
+          currentStream.getTracks().forEach(track => track.stop());
         }
 
+        // Fetch devices if we haven't yet
+        if (devices.length === 0) {
+          const allDevices = await navigator.mediaDevices.enumerateDevices();
+          devices = allDevices.filter(d => d.kind === 'videoinput');
+        }
+
+        // Set high-quality constraints
         const constraints = {
           video: {
-            deviceId: { exact: deviceId },
-            width: { ideal: 3840 }, // Aim for 4K
+            deviceId: devices[deviceIdx] ? { exact: devices[deviceIdx].deviceId } : undefined,
+            width: { ideal: 3840 },
             height: { ideal: 2160 },
-            frameRate: { ideal: 60 } // Maximize smoothness
+            frameRate: { ideal: 60 }
           }
         };
 
         try {
-          const stream = await navigator.mediaDevices.getUserMedia(constraints);
-          window.stream = stream;
-          video.srcObject = stream;
-          video.play();
-        } catch (e) {
-          console.error("Camera error:", e);
+          currentStream = await navigator.mediaDevices.getUserMedia(constraints);
+          video.srcObject = currentStream;
+          
+          // Cycle to next camera for next click (to find ultra-wide)
+          deviceIdx = (deviceIdx + 1) % devices.length;
+        } catch (err) {
+          alert("Camera Error: " + err.message);
         }
       }
 
-      // 3. Cycle through cameras (0.5x, 1x, etc.)
-      function cycleCamera() {
-        currentDeviceIndex = (currentDeviceIndex + 1) % videoDevices.length;
-        startCamera(videoDevices[currentDeviceIndex].deviceId);
-      }
-
-      function handleVRClick() {
-        const surface = document.querySelector('#click-surface');
-        surface.setAttribute('color', '#00AAFF');
-        setTimeout(() => surface.setAttribute('color', '#222'), 150);
-        console.log("Click detected!");
-      }
-
-      // Initialize
-      getCameras();
+      // Handle the tap-to-click logic
+      document.querySelector('#click-surface').addEventListener('click', function() {
+        this.setAttribute('color', '#00ff00');
+        setTimeout(() => this.setAttribute('color', '#333'), 100);
+        console.log("VR Click Registered!");
+      });
     </script>
   </body>
 </html>
+a
