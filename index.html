@@ -2,10 +2,10 @@
 <html>
   <head>
     <meta charset="utf-8">
-    <title>Fixed VR Background Passthrough</title>
+    <title>VR Passthrough - Fixed Layers</title>
     <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
     <style>
-      #ui {
+      #controls {
         position: fixed;
         top: 20px;
         left: 50%;
@@ -17,86 +17,88 @@
         background: #111;
         color: #0f0;
         border: 2px solid #0f0;
-        border-radius: 8px;
+        border-radius: 10px;
         font-weight: bold;
+        cursor: pointer;
       }
     </style>
   </head>
   <body>
 
-    <div id="ui">
-      <button onclick="toggleLens()">SWITCH REAR LENS (Main / Ultra-Wide)</button>
+    <div id="controls">
+      <button onclick="toggleBackCamera()">SWITCH REAR LENS (0.5x / 1.0x)</button>
     </div>
 
-    <a-scene cursor="rayOrigin: mouse" raycaster="objects: .interactive">
+    <a-scene cursor="rayOrigin: mouse" raycaster="objects: .interactive" background="color: black">
       <a-assets>
         <video id="webcam" playsinline crossorigin="anonymous" autoplay></video>
       </a-assets>
-
-      <a-entity id="browser-window" position="0 1.6 -3" class="interactive">
-        <a-plane width="3.2" height="2.2" color="#000" opacity="0.9"></a-plane>
-        <a-plane id="click-surface" width="3" height="2" color="#222" class="interactive" material="shader: flat">
-          <a-text value="STATIONARY WINDOW\nCamera is background\nTap screen to 'click'" align="center" width="2.5"></a-text>
-        </a-plane>
-      </a-entity>
 
       <a-entity id="rig">
         <a-camera look-controls wasd-controls-enabled="false">
           
           <a-video src="#webcam" 
-                   position="0 0 -10" 
-                   width="30" 
-                   height="22.5" 
+                   id="bg-plane"
+                   position="0 0 -15" 
+                   width="40" 
+                   height="30" 
                    material="shader: flat; depthTest: false; depthWrite: false"
-                   class="not-interactive">
+                   render-order="0">
           </a-video>
 
           <a-entity cursor="fuse: false"
-                    position="0 0 -0.9"
-                    geometry="primitive: ring; radiusInner: 0.008; radiusOuter: 0.012"
-                    material="color: #00ff00; shader: flat; depthTest: false"
-                    raycaster="objects: .interactive">
+                    position="0 0 -1"
+                    geometry="primitive: ring; radiusInner: 0.01; radiusOuter: 0.015"
+                    material="color: #00ff00; shader: flat; depthTest: false; transparent: true; opacity: 0.8"
+                    raycaster="objects: .interactive"
+                    render-order="2">
           </a-entity>
           
         </a-camera>
       </a-entity>
+
+      <a-entity id="browser-window" position="0 1.6 -3" class="interactive" render-order="1">
+        <a-plane width="3.2" height="2.2" color="#000" opacity="0.9"></a-plane>
+        <a-plane id="click-surface" width="3" height="2" color="#222" class="interactive" material="shader: flat">
+          <a-text value="FLOATING WINDOW\nVisible over camera feed\nTap to click" align="center" width="2.5"></a-text>
+        </a-plane>
+      </a-entity>
+
     </a-scene>
 
     <script>
       const video = document.getElementById('webcam');
-      let backDevices = [];
+      let backCameras = [];
       let currentIdx = 0;
 
-      async function findBackCameras() {
-        // Stop any current stream first
+      async function initCamera() {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        
+        // Filter out any device that says "front", "selfie", or "user"
+        backCameras = devices.filter(d => 
+          d.kind === 'videoinput' && 
+          !d.label.toLowerCase().includes('front') && 
+          !d.label.toLowerCase().includes('selfie') &&
+          !d.label.toLowerCase().includes('user')
+        );
+
+        // If filtering is too strict, default to any back-facing lens
+        if (backCameras.length === 0) {
+          console.warn("No labeled back cameras found, trying facingMode filter.");
+          backCameras = devices.filter(d => d.kind === 'videoinput');
+        }
+        
+        startStream();
+      }
+
+      async function startStream() {
         if (window.stream) {
           window.stream.getTracks().forEach(track => track.stop());
         }
 
-        const allDevices = await navigator.mediaDevices.enumerateDevices();
-        
-        // STRICT FILTER: Must be videoinput AND must not be the front camera
-        // We use a try/catch on facingMode because some browsers hide it until permission is granted
-        backDevices = allDevices.filter(d => d.kind === 'videoinput');
-        
-        // Remove known selfie cameras based on labels if possible
-        backDevices = backDevices.filter(d => {
-            const label = d.label.toLowerCase();
-            return !label.includes('front') && !label.includes('selfie') && !label.includes('user');
-        });
-
-        startLens();
-      }
-
-      async function startLens() {
-        if (backDevices.length === 0) {
-            alert("No back cameras detected.");
-            return;
-        }
-
         const constraints = {
           video: {
-            deviceId: { exact: backDevices[currentIdx].deviceId },
+            deviceId: backCameras[currentIdx] ? { exact: backCameras[currentIdx].deviceId } : undefined,
             width: { ideal: 3840 },
             height: { ideal: 2160 },
             frameRate: { ideal: 60 }
@@ -108,30 +110,25 @@
           window.stream = stream;
           video.srcObject = stream;
         } catch (err) {
-          console.error("Lens switch failed, trying generic environment", err);
-          const fallback = await navigator.mediaDevices.getUserMedia({ 
-              video: { facingMode: { exact: "environment" } } 
-          });
-          video.srcObject = fallback;
+          console.error("Camera access failed", err);
+          // Ultimate fallback
+          video.srcObject = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
         }
       }
 
-      function toggleLens() {
-        if (backDevices.length > 1) {
-          currentIdx = (currentIdx + 1) % backDevices.length;
-          startLens();
-        } else {
-          // If the list is short, just try the facingMode toggle
-          alert("Only one back camera detected by browser.");
+      function toggleBackCamera() {
+        if (backCameras.length > 1) {
+          currentIdx = (currentIdx + 1) % backCameras.length;
+          startStream();
         }
       }
 
-      // Initialize on first click
+      // Start on first user interaction
       window.addEventListener('click', () => {
-          if (!window.stream) findBackCameras();
+        if (!window.stream) initCamera();
       }, { once: true });
 
-      // Click Feedback
+      // Visual Click Feedback
       document.querySelector('#click-surface').addEventListener('click', function() {
         this.setAttribute('color', '#00ff00');
         setTimeout(() => this.setAttribute('color', '#222'), 100);
