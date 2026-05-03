@@ -2,54 +2,121 @@
 <html>
   <head>
     <meta charset="utf-8">
-    <title>VR Stationary Window - Fixed Cursor</title>
+    <title>VR Passthrough Browser</title>
     <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
+    <style>
+      /* HUD buttons that stay on top of the screen for non-VR tapping */
+      .controls {
+        position: fixed;
+        bottom: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 10;
+        display: flex;
+        gap: 10px;
+      }
+      button {
+        padding: 12px 20px;
+        background: rgba(0, 0, 0, 0.7);
+        color: white;
+        border: 2px solid #555;
+        border-radius: 8px;
+        font-family: sans-serif;
+        cursor: pointer;
+      }
+    </style>
   </head>
   <body>
+
+    <div class="controls">
+      <button onclick="cycleCamera()">Switch Camera (Zoom/Wide)</button>
+    </div>
+
     <a-scene cursor="rayOrigin: mouse" raycaster="objects: .interactive">
-      
-      <a-sky color="#050505"></a-sky>
-      <a-grid-helper size="10" divisions="10" color="#444"></a-grid-helper>
+      <a-assets>
+        <video id="webcam" playsinline crossorigin="anonymous"></video>
+      </a-assets>
+
+      <a-videosphere src="#webcam" rotation="0 -90 0" radius="100"></a-videosphere>
 
       <a-entity id="browser-window" position="0 1.6 -3" class="interactive">
         <a-plane width="3.2" height="2.2" color="#333" position="0 0 -0.01"></a-plane>
-        
         <a-plane id="click-surface" 
                  width="3" height="2" 
                  color="#222" 
+                 opacity="0.6"
                  class="interactive"
                  material="shader: flat"
                  onclick="handleVRClick()">
-          <a-text value="STATIONARY WINDOW\nLook away and I stay here.\nTap screen to 'click' me." 
+          <a-text value="STATIONARY WINDOW\nLook around; I stay here.\nTap screen to 'click' at cursor." 
                   align="center" width="2.8" color="#FFF"></a-text>
         </a-plane>
       </a-entity>
 
-      <a-entity id="rig" position="0 0 0">
+      <a-entity id="rig">
         <a-camera look-controls>
-          
           <a-entity cursor="fuse: false;"
                     position="0 0 -1"
                     geometry="primitive: ring; radiusInner: 0.008; radiusOuter: 0.012"
                     material="color: #00FF00; shader: flat; opacity: 0.8"
                     raycaster="objects: .interactive">
           </a-entity>
-          
         </a-camera>
       </a-entity>
-
     </a-scene>
 
     <script>
+      const video = document.querySelector('#webcam');
+      let currentDeviceIndex = 0;
+      let videoDevices = [];
+
+      // 1. Find all available cameras
+      async function getCameras() {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        videoDevices = devices.filter(device => device.kind === 'videoinput');
+        startCamera(videoDevices[currentDeviceIndex].deviceId);
+      }
+
+      // 2. Start the stream with high quality settings
+      async function startCamera(deviceId) {
+        if (window.stream) {
+          window.stream.getTracks().forEach(track => track.stop());
+        }
+
+        const constraints = {
+          video: {
+            deviceId: { exact: deviceId },
+            width: { ideal: 3840 }, // Aim for 4K
+            height: { ideal: 2160 },
+            frameRate: { ideal: 60 } // Maximize smoothness
+          }
+        };
+
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia(constraints);
+          window.stream = stream;
+          video.srcObject = stream;
+          video.play();
+        } catch (e) {
+          console.error("Camera error:", e);
+        }
+      }
+
+      // 3. Cycle through cameras (0.5x, 1x, etc.)
+      function cycleCamera() {
+        currentDeviceIndex = (currentDeviceIndex + 1) % videoDevices.length;
+        startCamera(videoDevices[currentDeviceIndex].deviceId);
+      }
+
       function handleVRClick() {
         const surface = document.querySelector('#click-surface');
-        surface.setAttribute('color', '#00AAFF'); // Highlight on click
-        console.log("Registered click on stationary window!");
-        
-        setTimeout(() => {
-          surface.setAttribute('color', '#222');
-        }, 150);
+        surface.setAttribute('color', '#00AAFF');
+        setTimeout(() => surface.setAttribute('color', '#222'), 150);
+        console.log("Click detected!");
       }
+
+      // Initialize
+      getCameras();
     </script>
   </body>
 </html>
