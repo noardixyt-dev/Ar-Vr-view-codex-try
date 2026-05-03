@@ -2,24 +2,20 @@
 <html>
   <head>
     <meta charset="utf-8">
-    <title>High-Sync VR Passthrough</title>
+    <title>Stereo Mirror Passthrough</title>
     <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
     <style>
-      #gui {
-        position: fixed; top: 10px; left: 50%; transform: translateX(-50%);
-        z-index: 1000; display: flex; gap: 10px;
-      }
-      button {
-        padding: 12px 24px; background: #000; color: #0f0; border: 2px solid #0f0;
-        border-radius: 30px; font-weight: bold; cursor: pointer;
-      }
+      #overlay { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 1000; }
+      button { padding: 15px 30px; background: #0f0; border: none; border-radius: 10px; font-weight: bold; cursor: pointer; }
+      /* Hide the source video so it doesn't mess with the VR view */
+      #webcam { display: none; }
     </style>
   </head>
   <body style="background: #000;">
 
-    <div id="gui">
-      <button onclick="enterVR()">1. ACTIVATE VR</button>
-      <button onclick="switchLens()">2. TOGGLE REAR LENS</button>
+    <div id="overlay">
+      <button onclick="startStereoAR()">START STEREO MIRROR</button>
+      <button onclick="toggleLens()" style="background: #444; color: #fff;">TOGGLE LENS</button>
     </div>
 
     <a-scene loading-screen="enabled: false" cursor="rayOrigin: mouse" raycaster="objects: .interactive">
@@ -27,30 +23,30 @@
         <video id="webcam" playsinline crossorigin="anonymous" autoplay></video>
       </a-assets>
 
-      <a-entity id="browser-window" position="0 1.6 -3" class="interactive">
-        <a-plane width="3.2" height="2.2" color="#000" opacity="0.9" material="shader: flat; depthTest: false"></a-plane>
-        <a-plane id="click-surface" width="3" height="2" color="#222" class="interactive" material="shader: flat; depthTest: false">
-          <a-text value="STATIONARY WINDOW\nStereo Sync Active\nTap to Click" align="center" width="2.5" color="#0f0"></a-text>
-        </a-plane>
-      </a-entity>
-
       <a-entity id="rig">
         <a-camera look-controls="pointerLockEnabled: true">
           
           <a-video src="#webcam" 
-                   id="stereo-bg"
-                   position="0 0 -15" 
-                   width="40" height="30" 
+                   id="stereo-mirror"
+                   position="0 0 -5" 
+                   width="16" height="12" 
                    material="shader: flat; depthTest: false; depthWrite: false"
-                   class="not-interactive">
+                   render-order="0">
           </a-video>
 
-          <a-entity cursor="fuse: false"
-                    position="0 0 -1"
-                    geometry="primitive: ring; radiusInner: 0.01; radiusOuter: 0.015"
-                    material="color: #0f0; shader: flat; depthTest: false; transparent: true; opacity: 0.8">
+          <a-entity id="browser-window" position="0 0 -3" class="interactive" render-order="1">
+            <a-plane width="2.2" height="1.4" color="#000" opacity="0.8" material="depthTest: false"></a-plane>
+            <a-plane id="click-surface" width="2" height="1.2" color="#222" class="interactive" material="shader: flat; depthTest: false">
+              <a-text value="SYNCED VR WINDOW\nStereo Mirror Active" align="center" width="2" color="#0f0"></a-text>
+            </a-plane>
           </a-entity>
-          
+
+          <a-entity cursor="fuse: false" position="0 0 -0.8"
+                    geometry="primitive: ring; radiusInner: 0.007; radiusOuter: 0.01"
+                    material="color: #0f0; shader: flat; depthTest: false"
+                    render-order="2">
+          </a-entity>
+
         </a-camera>
       </a-entity>
     </a-scene>
@@ -58,28 +54,29 @@
     <script>
       const video = document.getElementById('webcam');
       let backCameras = [];
-      let activeIdx = 0;
+      let lensIdx = 0;
 
-      async function enterVR() {
+      async function startStereoAR() {
+        document.getElementById('overlay').style.display = 'none';
         const scene = document.querySelector('a-scene');
         scene.enterVR();
 
-        // Detect all back-facing cameras
+        // Detect Rear Lenses Only
         const devices = await navigator.mediaDevices.enumerateDevices();
         backCameras = devices.filter(d => 
           d.kind === 'videoinput' && 
-          !/(front|selfie|user)/i.test(d.label)
+          !/front|selfie|user/i.test(d.label)
         );
 
-        setupCamera();
+        requestCamera();
       }
 
-      async function setupCamera() {
+      async function requestCamera() {
         if (window.stream) window.stream.getTracks().forEach(t => t.stop());
 
         const constraints = {
           video: {
-            deviceId: backCameras[activeIdx] ? { exact: backCameras[activeIdx].deviceId } : undefined,
+            deviceId: backCameras[lensIdx] ? { exact: backCameras[lensIdx].deviceId } : undefined,
             width: { ideal: 3840 },
             height: { ideal: 2160 },
             frameRate: { ideal: 60 }
@@ -90,24 +87,22 @@
           window.stream = await navigator.mediaDevices.getUserMedia(constraints);
           video.srcObject = window.stream;
         } catch (e) {
-          // Fallback to default environment camera
           video.srcObject = await navigator.mediaDevices.getUserMedia({video: {facingMode: 'environment'}});
         }
       }
 
-      function switchLens() {
+      function toggleLens() {
         if (backCameras.length > 1) {
-          activeIdx = (activeIdx + 1) % backCameras.length;
-          setupCamera();
+          lensIdx = (lensIdx + 1) % backCameras.length;
+          requestCamera();
         }
       }
 
-      // Tap-to-Click functionality
+      // Tap-to-click Logic
       document.querySelector('#click-surface').addEventListener('click', function() {
         this.setAttribute('color', '#00ff00');
-        setTimeout(() => this.setAttribute('color', '#222'), 150);
-        console.log("Click triggered at reticle position.");
+        setTimeout(() => this.setAttribute('color', '#222'), 100);
       });
     </script>
   </body>
-</html>
+</html>s
