@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="utf-8">
-    <title>Flat Passthrough VR</title>
+    <title>Fixed VR Passthrough</title>
     <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
     <style>
       #overlay {
@@ -19,13 +19,14 @@
         border: 2px solid #0f0;
         border-radius: 10px;
         font-weight: bold;
+        cursor: pointer;
       }
     </style>
   </head>
   <body>
 
     <div id="overlay">
-      <button onclick="startCamera()">START CAMERA / SWITCH LENS</button>
+      <button onclick="cycleBackCameras()">SWITCH LENS (Main / Ultra-Wide)</button>
     </div>
 
     <a-scene cursor="rayOrigin: mouse" raycaster="objects: .interactive">
@@ -33,10 +34,10 @@
         <video id="webcam" playsinline crossorigin="anonymous" autoplay></video>
       </a-assets>
 
-      <a-entity id="browser-window" position="0 1.6 -3" class="interactive">
+      <a-entity id="browser-window" position="0 1.6 -3" class="interactive" render-order="100">
         <a-plane width="3.2" height="2.2" color="#000" opacity="0.8"></a-plane>
         <a-plane id="click-surface" width="3" height="2" color="#222" class="interactive" material="shader: flat">
-          <a-text value="FLOATING WINDOW\nCamera is now flat background\nTap to click" align="center"></a-text>
+          <a-text value="FLOATING WINDOW\n(Always on Top)" align="center"></a-text>
         </a-plane>
       </a-entity>
 
@@ -44,16 +45,18 @@
         <a-camera look-controls wasd-controls-enabled="false">
           
           <a-video src="#webcam" 
-                   position="0 0 -20" 
-                   width="40" 
-                   height="30" 
-                   material="shader: flat; depthTest: false">
+                   position="0 0 -5" 
+                   width="20" 
+                   height="15" 
+                   material="shader: flat; depthTest: false; depthWrite: false"
+                   render-order="0">
           </a-video>
 
           <a-entity cursor="fuse: false"
                     position="0 0 -1"
                     geometry="primitive: ring; radiusInner: 0.01; radiusOuter: 0.015"
-                    material="color: #00ff00; shader: flat; transparent: true; opacity: 0.7"
+                    material="color: #00ff00; shader: flat; transparent: true; opacity: 0.9; depthTest: false"
+                    render-order="101"
                     raycaster="objects: .interactive">
           </a-entity>
           
@@ -63,24 +66,34 @@
 
     <script>
       const video = document.getElementById('webcam');
-      let currentStream = null;
-      let devices = [];
-      let deviceIdx = 0;
+      let backCameras = [];
+      let currentIdx = 0;
 
-      async function startCamera() {
-        if (currentStream) {
-          currentStream.getTracks().forEach(track => track.stop());
+      async function getBackCameras() {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        // Filter for video inputs and try to exclude 'front' or 'user' cameras
+        backCameras = devices.filter(d => 
+          d.kind === 'videoinput' && 
+          !d.label.toLowerCase().includes('front') && 
+          !d.label.toLowerCase().includes('selfie')
+        );
+        
+        // If the filter is too aggressive, just use all video devices
+        if (backCameras.length === 0) {
+          backCameras = devices.filter(d => d.kind === 'videoinput');
+        }
+      }
+
+      async function cycleBackCameras() {
+        if (backCameras.length === 0) await getBackCameras();
+        
+        if (window.stream) {
+          window.stream.getTracks().forEach(track => track.stop());
         }
 
-        if (devices.length === 0) {
-          const allDevices = await navigator.mediaDevices.enumerateDevices();
-          devices = allDevices.filter(d => d.kind === 'videoinput');
-        }
-
-        // Try to find the ultra-wide lens by checking labels or cycling
         const constraints = {
           video: {
-            deviceId: devices[deviceIdx] ? { exact: devices[deviceIdx].deviceId } : undefined,
+            deviceId: { exact: backCameras[currentIdx].deviceId },
             width: { ideal: 3840 },
             height: { ideal: 2160 },
             frameRate: { ideal: 60 }
@@ -88,15 +101,24 @@
         };
 
         try {
-          currentStream = await navigator.mediaDevices.getUserMedia(constraints);
-          video.srcObject = currentStream;
-          deviceIdx = (deviceIdx + 1) % devices.length; // Setup for next click toggle
+          const stream = await navigator.mediaDevices.getUserMedia(constraints);
+          window.stream = stream;
+          video.srcObject = stream;
+          // Toggle to next camera index
+          currentIdx = (currentIdx + 1) % backCameras.length;
         } catch (err) {
-          console.error(err);
+          console.error("Camera Error:", err);
+          // Fallback if 'exact' fails
+          const fallback = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+          video.srcObject = fallback;
         }
       }
 
-      // Handle Tap-to-Click
+      // Initial start
+      window.onload = () => {
+          // We wait for the first click to bypass browser security
+      };
+      
       document.querySelector('#click-surface').addEventListener('click', function() {
         this.setAttribute('color', '#00ff00');
         setTimeout(() => this.setAttribute('color', '#222'), 100);
