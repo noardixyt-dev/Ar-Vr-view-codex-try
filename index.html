@@ -2,53 +2,61 @@
 <html>
   <head>
     <meta charset="utf-8">
-    <title>Fixed VR Passthrough</title>
+    <title>Flat Passthrough VR</title>
     <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
     <style>
-      .overlay {
+      #overlay {
         position: fixed;
-        top: 10px;
-        left: 10px;
+        top: 20px;
+        left: 50%;
+        transform: translateX(-50%);
         z-index: 9999;
       }
       button {
-        padding: 15px;
+        padding: 15px 25px;
         background: #222;
         color: #0f0;
-        border: 1px solid #0f0;
+        border: 2px solid #0f0;
+        border-radius: 10px;
         font-weight: bold;
       }
     </style>
   </head>
   <body>
 
-    <div class="overlay">
-      <button onclick="initCamera()">START CAMERA / SWITCH LENS</button>
+    <div id="overlay">
+      <button onclick="startCamera()">START CAMERA / SWITCH LENS</button>
     </div>
 
-    <a-scene cursor="rayOrigin: mouse" raycaster="objects: .interactive" vr-mode-ui="enabled: true">
+    <a-scene cursor="rayOrigin: mouse" raycaster="objects: .interactive">
       <a-assets>
         <video id="webcam" playsinline crossorigin="anonymous" autoplay></video>
       </a-assets>
 
-      <a-videosphere src="#webcam" rotation="0 -90 0" radius="50"></a-videosphere>
-
       <a-entity id="browser-window" position="0 1.6 -3" class="interactive">
-        <a-plane width="3.2" height="2.2" color="#111" opacity="0.8" position="0 0 -0.01"></a-plane>
-        <a-plane id="click-surface" width="3" height="2" color="#333" class="interactive">
-          <a-text value="STATIONARY BROWSER\nIf cursor is split, adjust phone in headset." 
-                  align="center" width="2.5"></a-text>
+        <a-plane width="3.2" height="2.2" color="#000" opacity="0.8"></a-plane>
+        <a-plane id="click-surface" width="3" height="2" color="#222" class="interactive" material="shader: flat">
+          <a-text value="FLOATING WINDOW\nCamera is now flat background\nTap to click" align="center"></a-text>
         </a-plane>
       </a-entity>
 
       <a-entity id="rig">
-        <a-camera look-controls="pointerLockEnabled: true">
+        <a-camera look-controls wasd-controls-enabled="false">
+          
+          <a-video src="#webcam" 
+                   position="0 0 -20" 
+                   width="40" 
+                   height="30" 
+                   material="shader: flat; depthTest: false">
+          </a-video>
+
           <a-entity cursor="fuse: false"
-                    position="0 0 -1.01"
+                    position="0 0 -1"
                     geometry="primitive: ring; radiusInner: 0.01; radiusOuter: 0.015"
-                    material="color: #00ff00; shader: flat; transparent: true; opacity: 0.5"
+                    material="color: #00ff00; shader: flat; transparent: true; opacity: 0.7"
                     raycaster="objects: .interactive">
           </a-entity>
+          
         </a-camera>
       </a-entity>
     </a-scene>
@@ -59,19 +67,17 @@
       let devices = [];
       let deviceIdx = 0;
 
-      async function initCamera() {
-        // Stop current stream if switching
+      async function startCamera() {
         if (currentStream) {
           currentStream.getTracks().forEach(track => track.stop());
         }
 
-        // Fetch devices if we haven't yet
         if (devices.length === 0) {
           const allDevices = await navigator.mediaDevices.enumerateDevices();
           devices = allDevices.filter(d => d.kind === 'videoinput');
         }
 
-        // Set high-quality constraints
+        // Try to find the ultra-wide lens by checking labels or cycling
         const constraints = {
           video: {
             deviceId: devices[deviceIdx] ? { exact: devices[deviceIdx].deviceId } : undefined,
@@ -84,21 +90,17 @@
         try {
           currentStream = await navigator.mediaDevices.getUserMedia(constraints);
           video.srcObject = currentStream;
-          
-          // Cycle to next camera for next click (to find ultra-wide)
-          deviceIdx = (deviceIdx + 1) % devices.length;
+          deviceIdx = (deviceIdx + 1) % devices.length; // Setup for next click toggle
         } catch (err) {
-          alert("Camera Error: " + err.message);
+          console.error(err);
         }
       }
 
-      // Handle the tap-to-click logic
+      // Handle Tap-to-Click
       document.querySelector('#click-surface').addEventListener('click', function() {
         this.setAttribute('color', '#00ff00');
-        setTimeout(() => this.setAttribute('color', '#333'), 100);
-        console.log("VR Click Registered!");
+        setTimeout(() => this.setAttribute('color', '#222'), 100);
       });
     </script>
   </body>
 </html>
-a
